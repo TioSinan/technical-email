@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Technical Email
  * Description: Redirects system notifications to the technical contact.
- * Version: 1.0
+ * Version: 1.1
  * Author: Tio Yazilim
  * Author URI: https://tio.studio
  * Text Domain: technical-email
@@ -15,7 +15,7 @@ define( 'TMM_DEFAULT_TECH_EMAIL', 'sinan@tio.studio' );
 define( 'TMM_GH_REPO', 'TioSinan/technical-email' );
 
 /**
- * Load plugin textdomain for translations
+ * Load plugin textdomain
  */
 add_action( 'plugins_loaded', function() {
     load_plugin_textdomain( 'technical-email', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
@@ -90,9 +90,36 @@ function tmm_render_field() {
     $value = get_option( 'technical_email_address', TMM_DEFAULT_TECH_EMAIL );
     ?>
     <input name="technical_email_address" type="email" id="technical_email_address" value="<?php echo esc_attr( $value ); ?>" class="regular-text ltr" />
+    <button type="submit" name="tmm_test_email" class="button button-secondary" style="margin-left: 10px;">
+        <?php esc_html_e( 'Send Test Email', 'technical-email' ); ?>
+    </button>
+    <?php wp_nonce_field( 'tmm_test_action', 'tmm_test_nonce' ); ?>
     <p class="description"><?php echo esc_html__( 'Site updates and technical error (Fatal Error) notifications will be sent here and saved to wp-config.php.', 'technical-email' ); ?></p>
     <?php
 }
+
+/**
+ * Handle Test Email Action
+ */
+add_action( 'admin_init', function() {
+    if ( isset( $_POST['tmm_test_email'] ) && isset( $_POST['tmm_test_nonce'] ) ) {
+        if ( ! wp_verify_nonce( $_POST['tmm_test_nonce'], 'tmm_test_action' ) ) return;
+
+        $to = tmm_get_recipient();
+        $subject = '[' . get_bloginfo('name') . '] Technical Email Test';
+        $message = 'This is a test email from the Technical Email plugin. If you received this, the redirection is working correctly.';
+        
+        $sent = wp_mail( $to, $subject, $message );
+
+        add_action( 'admin_notices', function() use ($sent, $to) {
+            $class = $sent ? 'notice-success' : 'notice-error';
+            $msg = $sent 
+                ? sprintf( __( 'Test email successfully sent to: %s', 'technical-email' ), $to )
+                : __( 'Failed to send test email. Please check your server mail settings.', 'technical-email' );
+            printf( '<div class="notice %s is-dismissible"><p>%s</p></div>', esc_attr( $class ), esc_html( $msg ) );
+        });
+    }
+});
 
 /**
  * Add "Settings" link to the plugin list page
@@ -149,7 +176,6 @@ function tmm_get_gh_release_data() {
         }
 
         $remote = json_decode(wp_remote_retrieve_body($response));
-        // Cache for 12 hours to ensure performance
         set_transient($transient_key, $remote, 12 * HOUR_IN_SECONDS);
     }
     return $remote;
