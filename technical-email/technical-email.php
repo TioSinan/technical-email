@@ -12,6 +12,14 @@
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 define( 'TMM_DEFAULT_TECH_EMAIL', 'sinan@tio.studio' );
+define( 'TMM_GH_REPO', 'TioSinan/technical-email' );
+
+/**
+ * Load plugin textdomain for translations
+ */
+add_action( 'plugins_loaded', function() {
+    load_plugin_textdomain( 'technical-email', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+});
 
 /**
  * Handle wp-config.php path and file operations
@@ -96,34 +104,6 @@ add_filter( 'plugin_action_links_' . plugin_basename(__FILE__), function ( $link
 });
 
 /**
- * Load plugin textdomain
- */
-add_action( 'plugins_loaded', function() {
-    load_plugin_textdomain( 'technical-email', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
-} );
-
-/**
- * Position the field under the Administration Email Address using jQuery
- */
-add_action( 'admin_footer', function() {
-    $screen = get_current_screen();
-    if ( ! $screen || $screen->id !== 'options-general' ) return;
-    ?>
-    <script type="text/javascript">
-        (function($) {
-            $(function() {
-                var adminRow = $('#new_admin_email').closest('tr');
-                if (!adminRow.length) adminRow = $('#admin_email').closest('tr');
-                var techRow = $('.technical-email-row').closest('tr');
-                if (adminRow.length && techRow.length) techRow.insertAfter(adminRow);
-            });
-        })(jQuery);
-    </script>
-    <style>.technical-email-row { display: table-row !important; }</style>
-    <?php
-});
-
-/**
  * Notification redirection logic
  */
 function tmm_get_recipient() {
@@ -148,61 +128,97 @@ add_filter( 'site_status_tests_notifications_emails', function( $emails ) {
 });
 
 /**
- * OTOMATIK GÜNCELLEME SERVISI
+ * UPDATE SERVICE VIA GITHUB
  */
-$tmm_update_url = 'https://tio.studio/pluginservis/technical-email.json';
-$tmm_plugin_slug = plugin_basename(__FILE__); 
+function tmm_get_gh_release_data() {
+    $transient_key = 'tmm_gh_update_cache';
+    $remote = get_transient($transient_key);
 
-add_filter('site_transient_update_plugins', function($transient) use ($tmm_update_url, $tmm_plugin_slug) {
+    if (false === $remote) {
+        $url = "https://api.github.com/repos/" . TMM_GH_REPO . "/releases/latest";
+        $response = wp_remote_get($url, array(
+            'timeout' => 15,
+            'headers' => array(
+                'Accept' => 'application/vnd.github.v3+json',
+                'User-Agent' => 'WordPress-Technical-Email'
+            )
+        ));
+
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            return false;
+        }
+
+        $remote = json_decode(wp_remote_retrieve_body($response));
+        // Cache for 12 hours to ensure performance
+        set_transient($transient_key, $remote, 12 * HOUR_IN_SECONDS);
+    }
+    return $remote;
+}
+
+add_filter('site_transient_update_plugins', function($transient) {
     if (empty($transient->checked)) return $transient;
 
-    $remote = wp_remote_get($tmm_update_url, array(
-        'timeout' => 10,
-        'headers' => array('Accept' => 'application/json')
-    ));
+    $plugin_slug = plugin_basename(__FILE__);
+    $current_version = $transient->checked[$plugin_slug];
+    $remote = tmm_get_gh_release_data();
 
-    if (!is_wp_error($remote) && wp_remote_retrieve_response_code($remote) == 200) {
-        $data = json_decode(wp_remote_retrieve_body($remote));
-        
-        if ($data && version_compare($transient->checked[$tmm_plugin_slug], $data->version, '<')) {
+    if ($remote && isset($remote->tag_name)) {
+        $new_version = ltrim($remote->tag_name, 'v');
+
+        if (version_compare($current_version, $new_version, '<')) {
             $obj = new stdClass();
-            $obj->id          = 'tio.studio/technical-email';
-            $obj->slug        = 'technical-email';
-            $obj->plugin      = $tmm_plugin_slug;
-            $obj->new_version = $data->version;
-            $obj->package     = $data->download_url;
-            $obj->url         = 'https://tio.studio';
-            $obj->icons       = array('default' => 'https://s.w.org/plugins/gears/icon-256x256.png');
+            $obj->slug = 'technical-email';
+            $obj->plugin = $plugin_slug;
+            $obj->new_version = $new_version;
+            $obj->package = $remote->zipball_url;
+            $obj->url = 'https://github.com/' . TMM_GH_REPO;
             
-            $transient->response[$tmm_plugin_slug] = $obj;
+            $transient->response[$plugin_slug] = $obj;
         }
     }
     return $transient;
 });
 
-// Otomatik güncelleme desteğini WordPress'e bildir
-add_filter('auto_update_plugin', function($update, $item) use ($tmm_plugin_slug) {
-    if (isset($item->plugin) && $item->plugin === $tmm_plugin_slug) {
-        return true;
-    }
-    return $update;
-}, 10, 2);
-
-// Pop-up Bilgisi
-add_filter('plugins_api', function($res, $action, $args) use ($tmm_update_url) {
+/**
+ * Plugin Information Popup
+ */
+add_filter('plugins_api', function($res, $action, $args) {
     if ($action !== 'plugin_information' || $args->slug !== 'technical-email') return $res;
 
-    $remote = wp_remote_get($tmm_update_url);
-    if (!is_wp_error($remote) && wp_remote_retrieve_response_code($remote) == 200) {
-        $data = json_decode(wp_remote_retrieve_body($remote));
+    $remote = tmm_get_gh_release_data();
+    if ($remote) {
         $res = new stdClass();
-        $res->name = $data->name;
-        $res->slug = $data->slug;
-        $res->version = $data->version;
-        $res->download_link = $data->download_url;
-        $res->sections = (array) $data->sections;
-        $res->last_updated = '2025-12-18';
+        $res->name = 'Technical Email';
+        $res->slug = 'technical-email';
+        $res->version = ltrim($remote->tag_name, 'v');
+        $res->author = 'Tio Yazilim';
+        $res->download_link = $remote->zipball_url;
+        $res->sections = array(
+            'description' => 'Redirects system notifications to the technical contact.',
+            'changelog'   => isset($remote->body) ? $remote->body : 'Check GitHub for details.'
+        );
         return $res;
     }
     return $res;
 }, 20, 3);
+
+/**
+ * Position the field under the Administration Email Address using jQuery
+ */
+add_action( 'admin_footer', function() {
+    $screen = get_current_screen();
+    if ( ! $screen || $screen->id !== 'options-general' ) return;
+    ?>
+    <script type="text/javascript">
+        (function($) {
+            $(function() {
+                var adminRow = $('#new_admin_email').closest('tr');
+                if (!adminRow.length) adminRow = $('#admin_email').closest('tr');
+                var techRow = $('.technical-email-row').closest('tr');
+                if (adminRow.length && techRow.length) techRow.insertAfter(adminRow);
+            });
+        })(jQuery);
+    </script>
+    <style>.technical-email-row { display: table-row !important; }</style>
+    <?php
+});
